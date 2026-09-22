@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
@@ -7,7 +9,11 @@ from app.core.database import get_db
 from app.main import app
 from app.models import Base
 
-TEST_DATABASE_URL = "postgresql+psycopg2://localhost/plant_ops_dashboard_test"
+# Defaults to the docker-compose database; override with TEST_DATABASE_URL.
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql+psycopg2://plantops:plantops@localhost:5432/plant_ops_dashboard_test",
+)
 
 engine = create_engine(TEST_DATABASE_URL)
 TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)

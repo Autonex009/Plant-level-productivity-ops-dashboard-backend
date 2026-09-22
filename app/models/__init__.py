@@ -1,3 +1,4 @@
+from app.models.alerts import AlertAcknowledgement
 from app.models.base import Base
 from app.models.bundling import BundlingRecord
 from app.models.machine import Machine
@@ -14,6 +15,7 @@ from app.models.shift import Shift
 
 __all__ = [
     "Base",
+    "AlertAcknowledgement",
     "Plant",
     "Machine",
     "MetricDefinition",

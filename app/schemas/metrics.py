@@ -35,6 +35,11 @@ class PlantMetricTargetBase(ORMBase):
     metric_definition_id: int
     target_value: float
     effective_from: date
+    red_line_value: float | None = None
+    band_low: float | None = None
+    band_high: float | None = None
+    monsoon_band_low: float | None = None
+    monsoon_band_high: float | None = None
 
 
 class PlantMetricTargetCreate(PlantMetricTargetBase):
@@ -46,6 +51,11 @@ class PlantMetricTargetUpdate(ORMBase):
     metric_definition_id: int | None = None
     target_value: float | None = None
     effective_from: date | None = None
+    red_line_value: float | None = None
+    band_low: float | None = None
+    band_high: float | None = None
+    monsoon_band_low: float | None = None
+    monsoon_band_high: float | None = None
 
 
 class PlantMetricTargetRead(PlantMetricTargetBase, TimestampedRead):

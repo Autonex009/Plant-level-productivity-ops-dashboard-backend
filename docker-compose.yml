@@ -1,0 +1,20 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: plant_ops_db
+    environment:
+      POSTGRES_USER: plantops
+      POSTGRES_PASSWORD: plantops
+      POSTGRES_DB: plant_ops_dashboard
+    ports:
+      - "5432:5432"
+    volumes:
+      - plant_ops_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U plantops -d plant_ops_dashboard"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  plant_ops_pgdata:

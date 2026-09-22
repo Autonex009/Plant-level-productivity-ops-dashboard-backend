@@ -30,8 +30,14 @@ class Order(Base, TimestampMixin):
     due_date: Mapped[date | None]
 
     # Job-specific throughput standard, since it varies by ply/flute/spec.
+    # This is the corrugator's standard, in m/min: boarding is continuous.
     standard_speed: Mapped[float | None] = mapped_column(Float)
     standard_speed_unit: Mapped[str | None] = mapped_column(String(20))  # e.g. "m/min", "sheets/hr"
+
+    # The same job's printing standard, in sheets/hr. Printing is a batch process
+    # whose standard varies by colour count, size and board grade, so it cannot be
+    # derived from the corrugator's metres-per-minute figure.
+    printing_standard_sheets_per_hr: Mapped[float | None] = mapped_column(Float)
 
     # Captured at bundling: basis of on-time delivery reporting.
     order_complete_staged_at: Mapped[datetime | None]

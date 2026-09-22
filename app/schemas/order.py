@@ -17,6 +17,7 @@ class OrderBase(ORMBase):
     due_date: date | None = None
     standard_speed: float | None = None
     standard_speed_unit: str | None = None
+    printing_standard_sheets_per_hr: float | None = None
     order_complete_staged_at: datetime | None = None
 
 
@@ -38,6 +39,7 @@ class OrderUpdate(ORMBase):
     due_date: date | None = None
     standard_speed: float | None = None
     standard_speed_unit: str | None = None
+    printing_standard_sheets_per_hr: float | None = None
     order_complete_staged_at: datetime | None = None
 
 

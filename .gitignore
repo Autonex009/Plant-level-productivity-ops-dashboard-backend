@@ -2,3 +2,8 @@
 __pycache__/
 *.pyc
 .env
+.env*
+.vercel
+.agents/
+.claude/
+skills-lock.json

@@ -1,0 +1,63 @@
+name: Keep demo data live
+
+# Machine Monitoring answers "what is happening right now", and greys a machine
+# out once its newest time log is more than 20 minutes old. The Vercel cron in
+# vercel.json only tops the data up once a day, because daily is the only
+# schedule the Hobby plan allows - which leaves the live screens blank for all
+# but a few minutes of the day.
+#
+# This closes that gap: it calls /internal/top-up-live often enough that the
+# newest time log is never far behind the clock. The endpoint is additive only
+# (it inserts new rows, never updates or deletes), so a duplicate or retried run
+# is harmless - it simply finds a smaller gap to fill.
+#
+# Every five minutes is deliberate headroom, not precision: GitHub's scheduler
+# is best-effort and routinely runs late under load, so aiming well inside the
+# 20-minute staleness window keeps the screens live even when a tick slips.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  # So it can be triggered by hand after a deploy or a reseed.
+  workflow_dispatch:
+
+# A late tick plus a manual run must not pile up on the same database.
+concurrency:
+  group: keep-demo-live
+  cancel-in-progress: false
+
+jobs:
+  top-up:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Top up the live window
+        env:
+          BACKEND_URL: ${{ secrets.BACKEND_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${BACKEND_URL:-}" ] || [ -z "${CRON_SECRET:-}" ]; then
+            echo "::error::Set the BACKEND_URL and CRON_SECRET repository secrets."
+            exit 1
+          fi
+
+          # --retry covers a cold serverless function or a sleeping Neon branch,
+          # either of which can make the first call of a quiet period time out.
+          status=$(curl --silent --show-error --location \
+            --retry 3 --retry-delay 5 --retry-connrefused \
+            --max-time 60 \
+            --header "Authorization: Bearer ${CRON_SECRET}" \
+            --output response.json \
+            --write-out '%{http_code}' \
+            "${BACKEND_URL%/}/internal/top-up-live")
+
+          echo "HTTP ${status}"
+          cat response.json || true
+          echo
+
+          if [ "${status}" != "200" ]; then
+            echo "::error::top-up-live returned ${status}"
+            exit 1
+          fi

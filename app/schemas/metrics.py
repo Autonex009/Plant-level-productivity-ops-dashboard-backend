@@ -1,5 +1,7 @@
 from datetime import date
 
+from pydantic import computed_field
+
 from app.models.enums import MetricCategory, Stage
 from app.schemas.base import ORMBase, TimestampedRead
 
@@ -27,7 +29,19 @@ class MetricDefinitionUpdate(ORMBase):
 
 
 class MetricDefinitionRead(MetricDefinitionBase, TimestampedRead):
-    pass
+    @computed_field
+    @property
+    def lower_is_better(self) -> bool:
+        """Which way is good for this metric.
+
+        Served rather than left for each client to work out, because the answer
+        decides which side of a target is green - and a second copy of that list
+        in a UI is a copy that will eventually disagree with the one the RAG
+        verdicts are actually computed from.
+        """
+        from app.services.dashboard.bands import LOWER_IS_BETTER
+
+        return self.code in LOWER_IS_BETTER
 
 
 class PlantMetricTargetBase(ORMBase):

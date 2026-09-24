@@ -27,7 +27,7 @@ import argparse
 import random
 from datetime import date, datetime, time, timedelta
 
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal, engine
@@ -820,14 +820,149 @@ def _add_ink_checks(
             )
 
 
+def _load_master_data(db: Session) -> tuple[Plant, list[Machine], dict, dict, dict] | None:
+    """Loads master data created by a previous full seed, rather than creating
+    it again - the incremental top-up assumes the plant already exists and
+    only ever adds new days on top of it."""
+    plant = db.query(Plant).order_by(Plant.id).first()
+    if plant is None:
+        return None
+
+    machines = db.query(Machine).filter(Machine.plant_id == plant.id).all()
+    downtime_codes = {code.code: code for code in db.query(DowntimeReasonCode).all()}
+    defect_codes = {code.code: code for code in db.query(DefectReasonCode).all()}
+    definitions = {definition.code: definition for definition in db.query(MetricDefinition).all()}
+    return plant, machines, downtime_codes, defect_codes, definitions
+
+
+def advance_to_today(
+    db: Session, now: datetime, *, prune_after_days: int = 120
+) -> dict:
+    """Tops the demo data up to the current day, without touching history.
+
+    Idempotent and self-healing: if it has not run in a while (a deploy
+    freeze, a missed cron trigger), it backfills every day from the last
+    seeded one through today rather than only "today" - so a gap never
+    shows up as a hole in the trend charts. Safe to call more than once on
+    the same day; a day that already has a shift is left untouched.
+
+    Returns a small summary rather than printing, since this is called from
+    an HTTP endpoint as well as the CLI.
+    """
+    loaded = _load_master_data(db)
+    if loaded is None:
+        return {"status": "skipped", "reason": "no plant found - run a full seed first"}
+    plant, machines, downtime_codes, defect_codes, definitions = loaded
+
+    latest = db.query(func.max(Shift.shift_date)).filter(Shift.plant_id == plant.id).scalar()
+    today = now.date()
+    start = (latest + timedelta(days=1)) if latest else (today - timedelta(days=59))
+    if start > today:
+        return {"status": "up_to_date", "latest_shift_date": str(latest)}
+
+    days_added = 0
+    day = start
+    while day <= today:
+        _seed_day(db, plant, machines, downtime_codes, defect_codes, definitions, day, now=now)
+        days_added += 1
+        day += timedelta(days=1)
+
+    # Same "ship anything overdue" maintenance the full seed does, so open
+    # orders don't accumulate into a permanent backlog.
+    cutoff = today - timedelta(days=3)
+    shipped_late = 0
+    for order in (
+        db.query(Order)
+        .filter(
+            Order.plant_id == plant.id,
+            Order.order_complete_staged_at.is_(None),
+            Order.due_date < cutoff,
+        )
+        .all()
+    ):
+        slip = RNG.choice([0, 0, 0, 0, 1, 1, 2])
+        order.order_complete_staged_at = datetime.combine(
+            order.due_date + timedelta(days=slip), time(RNG.randint(9, 21), RNG.randint(0, 59))
+        )
+        shipped_late += 1 if slip else 0
+
+    pruned = _prune_before(db, plant, today - timedelta(days=prune_after_days))
+
+    db.commit()
+    return {
+        "status": "advanced",
+        "days_added": days_added,
+        "from": str(start),
+        "through": str(today),
+        "shipped_late": shipped_late,
+        "pruned_shifts": pruned,
+    }
+
+
+def _prune_before(db: Session, plant: Plant, cutoff: date) -> int:
+    """Deletes shifts (and everything hanging off them) older than cutoff, so
+    the demo dataset stays a bounded rolling window instead of growing
+    forever. Orders are left alone - a handful of old, already-shipped order
+    rows are harmless and nothing reads them past their own shift."""
+    old_shift_ids = [
+        row[0]
+        for row in db.query(Shift.id).filter(Shift.plant_id == plant.id, Shift.shift_date < cutoff).all()
+    ]
+    if not old_shift_ids:
+        return 0
+
+    # One statement per execute() call - psycopg2's extended query protocol
+    # (used whenever parameters are bound) does not run multiple
+    # semicolon-separated statements in a single call.
+    statements = [
+        """DELETE FROM parameter_readings WHERE machine_run_id IN (
+               SELECT id FROM machine_runs WHERE shift_id = ANY(:ids)
+           )""",
+        """DELETE FROM defect_observations WHERE quality_record_id IN (
+               SELECT id FROM quality_records WHERE machine_run_id IN (
+                   SELECT id FROM machine_runs WHERE shift_id = ANY(:ids)
+               )
+           )""",
+        """DELETE FROM quality_records WHERE machine_run_id IN (
+               SELECT id FROM machine_runs WHERE shift_id = ANY(:ids)
+           )""",
+        """DELETE FROM bundling_records WHERE machine_run_id IN (
+               SELECT id FROM machine_runs WHERE shift_id = ANY(:ids)
+           )""",
+        """DELETE FROM material_flows WHERE machine_run_id IN (
+               SELECT id FROM machine_runs WHERE shift_id = ANY(:ids)
+           )""",
+        """DELETE FROM time_logs WHERE machine_run_id IN (
+               SELECT id FROM machine_runs WHERE shift_id = ANY(:ids)
+           )""",
+        "DELETE FROM machine_runs WHERE shift_id = ANY(:ids)",
+        "DELETE FROM shifts WHERE id = ANY(:ids)",
+    ]
+    for statement in statements:
+        db.execute(text(statement), {"ids": old_shift_ids})
+    return len(old_shift_ids)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--days", type=int, default=60, help="days of history ending today")
     parser.add_argument("--reset", action="store_true", help="truncate existing data first")
+    parser.add_argument(
+        "--advance",
+        action="store_true",
+        help="top up an existing seed to today instead of a full (re)seed - "
+        "what the daily cron calls",
+    )
     args = parser.parse_args()
 
     Base.metadata.create_all(engine)
     now = datetime.now()
+
+    if args.advance:
+        with SessionLocal() as db:
+            result = advance_to_today(db, now)
+        print(result)
+        return
 
     with SessionLocal() as db:
         if args.reset:

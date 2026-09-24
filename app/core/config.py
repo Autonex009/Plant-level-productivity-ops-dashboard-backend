@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     order_at_risk_value_fraction: float = 0.12
     order_at_risk_cap_inr: float = 25000.0
 
+    # Vercel sets this automatically as an env var and stamps cron-triggered
+    # requests with `Authorization: Bearer <value>` - checked by the
+    # /internal/advance-demo-day endpoint so it can't be hit by anyone else.
+    cron_secret: str | None = None
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

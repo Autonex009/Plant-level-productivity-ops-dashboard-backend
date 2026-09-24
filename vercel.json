@@ -2,7 +2,13 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "app/main.py": {
-      "maxDuration": 30
+      "maxDuration": 60
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/internal/advance-demo-day",
+      "schedule": "0 2 * * *"
+    }
+  ]
 }

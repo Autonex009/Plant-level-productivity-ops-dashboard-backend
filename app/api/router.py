@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.routers.analytics import router as analytics_router
 from app.api.routers.bundling import router as bundling_records_router
+from app.api.routers.chat import router as chat_router
 from app.api.routers.dashboard import router as dashboard_router
 from app.api.routers.machines import router as machines_router
 from app.api.routers.metrics import (
@@ -50,5 +51,6 @@ for router in (
     daily_plant_rollups_router,
     analytics_router,
     dashboard_router,
+    chat_router,
 ):
     api_router.include_router(router)

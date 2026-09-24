@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     # /internal/advance-demo-day endpoint so it can't be hit by anyone else.
     cron_secret: str | None = None
 
+    # DeepSeek key for the dashboard's chat assistant. Server-side only - the
+    # browser never sees it, it only ever talks to our own /chat endpoint.
+    deepseek_api_key: str | None = None
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

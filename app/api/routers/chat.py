@@ -14,12 +14,15 @@ tells it to say so rather than guess.
 """
 
 import json
+import threading
+import time
 import urllib.error
 import urllib.request
+from collections import defaultdict, deque
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -44,6 +47,46 @@ DEEPSEEK_MODEL = "deepseek-chat"
 REQUEST_TIMEOUT_SECONDS = 30
 MAX_REPLY_TOKENS = 600
 ALERT_CAP = 5
+
+
+class RateLimiter:
+    """A basic in-memory sliding window - good enough to stop one browser
+    tab (or one bad actor) from hammering a paid API key, not a distributed
+    limiter. It only sees traffic that lands on this process, so it resets
+    on a cold start and doesn't coordinate across concurrent instances -
+    acceptable here because the global cap below still bounds worst-case
+    spend per warm instance, which is the actual thing being protected."""
+
+    def __init__(self, max_requests: int, window_seconds: float):
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self._hits: dict[str, deque[float]] = defaultdict(deque)
+        self._lock = threading.Lock()
+
+    def allow(self, key: str) -> bool:
+        now = time.monotonic()
+        with self._lock:
+            hits = self._hits[key]
+            while hits and now - hits[0] > self.window_seconds:
+                hits.popleft()
+            if len(hits) >= self.max_requests:
+                return False
+            hits.append(now)
+            return True
+
+
+# Per caller: enough for a real back-and-forth conversation, not enough to
+# script a loop against the key. Global: a hard ceiling on this instance's
+# spend regardless of how many distinct IPs show up.
+_per_ip_limiter = RateLimiter(max_requests=8, window_seconds=60)
+_global_limiter = RateLimiter(max_requests=60, window_seconds=60)
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 SYSTEM_PROMPT = (
     "You are the assistant embedded in the operations dashboard for Shree "
@@ -144,9 +187,20 @@ class ChatResponse(BaseModel):
 
 
 @router.post("", response_model=ChatResponse)
-def chat(request: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
+def chat(request: ChatRequest, http_request: Request, db: Session = Depends(get_db)) -> ChatResponse:
     if not settings.deepseek_api_key:
         raise HTTPException(status_code=503, detail="Chat is not configured (missing DEEPSEEK_API_KEY).")
+
+    if not _global_limiter.allow("global"):
+        raise HTTPException(
+            status_code=429,
+            detail="The assistant is getting a lot of questions right now. Please try again shortly.",
+        )
+    if not _per_ip_limiter.allow(_client_ip(http_request)):
+        raise HTTPException(
+            status_code=429,
+            detail="You're sending messages a bit fast - please wait a moment and try again.",
+        )
 
     now = datetime.now()
     try:

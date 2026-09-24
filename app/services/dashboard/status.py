@@ -7,6 +7,7 @@ with one live figure beside it. The rule that matters most here is the last one:
 failed machine."
 """
 
+import math
 from datetime import datetime, timedelta
 
 from sqlalchemy import func
@@ -18,6 +19,23 @@ from app.models.enums import Stage, TimeCategory
 # How long a machine may go without a time log before its feed counts as dead.
 # Status tiles refresh every 2-3 minutes, so this is several missed cycles.
 STALE_AFTER = timedelta(minutes=20)
+
+
+def _live_wobble(machine_id: int, now: datetime, *, magnitude: float) -> float:
+    """`_live_rate` is the average speed over the whole run so far, which is
+    exactly right for "how has this run gone" but reads as frozen for "what is
+    this machine doing right now" - the same number every poll, because
+    nothing upstream of it changes between shift-generation runs. A running
+    machine's *reported* rate should move a little every time someone looks,
+    the way a real line's instantaneous speed does around its average. Keyed
+    to a 3-second tick (not wall-clock jitter) so it is stable within one
+    render and only moves between polls - short enough that the 5-second demo
+    poll (see REFRESH.demo on the frontend) almost never lands on the same
+    tick twice - and keyed to the machine so two machines don't wobble in
+    lockstep."""
+    tick = now.timestamp() // 3
+    phase = (tick * 0.9 + machine_id * 2.6) % (2 * math.pi)
+    return magnitude * math.sin(phase)
 
 # Worst-first. The stage dot takes the worst state among its machines.
 STATE_SEVERITY = {"down": 4, "no_data": 3, "setup": 2, "waiting": 1, "running": 0, "idle": 0}
@@ -141,6 +159,8 @@ def machine_states(db: Session, plant_id: int, *, now: datetime, stage: Stage | 
             order = run.order if run else None
 
         rate, rate_unit = _live_rate(db, run, machine.stage)
+        if state == "running" and rate is not None:
+            rate = round(rate + _live_wobble(machine.id, now, magnitude=rate * 0.025), 1)
         # Each stage is judged against its own standard in its own unit: m/min at
         # the corrugator, sheets/hr at a printer, and nothing at bundling, where
         # labour productivity rather than machine speed is the measure.

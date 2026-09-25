@@ -25,6 +25,7 @@ from app.services.dashboard import specifics as specifics_service
 from app.services.dashboard import stage as stage_service
 from app.services.dashboard.bands import load_bands
 from app.services.dashboard.ranges import RangeMode, RangeSpec, resolve_range
+from app.services.dashboard.self_heal import heal_if_stale
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -72,6 +73,9 @@ def get_plant_overview(
     _require_plant(db, plant_id)
     now = _now(as_of)
     spec = _spec(range_mode, date_from, date_to, now)
+    # Both of these render live machine state, so both are worth healing.
+    # No-ops unless the demo flag is on and the data has actually gone stale.
+    heal_if_stale(db, plant_id, now)
 
     overview = plant_service.plant_overview(db, plant_id, spec, now=now)
     bands = load_bands(db, plant_id, on_date=spec.end)
@@ -131,6 +135,9 @@ def get_stage_view(
     _require_plant(db, plant_id)
     now = _now(as_of)
     spec = _spec(range_mode, date_from, date_to, now)
+    # Both of these render live machine state, so both are worth healing.
+    # No-ops unless the demo flag is on and the data has actually gone stale.
+    heal_if_stale(db, plant_id, now)
 
     view = stage_service.stage_view(db, plant_id, stage, spec, now=now)
     bands = load_bands(db, plant_id, on_date=spec.end)

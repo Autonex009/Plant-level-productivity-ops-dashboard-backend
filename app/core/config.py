@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     order_at_risk_value_fraction: float = 0.12
     order_at_risk_cap_inr: float = 25000.0
 
+    # Lets a request top the demo dataset up when it has gone stale, so the
+    # live screens work without a scheduler frequent enough to keep them fresh
+    # (see services/dashboard/self_heal.py). Off by default and must stay off
+    # anywhere a real feed writes the data - an API that invents production is
+    # exactly what the grey "no data" rule exists to prevent.
+    demo_self_heal: bool = False
+
     # Vercel sets this automatically as an env var and stamps cron-triggered
     # requests with `Authorization: Bearer <value>` - checked by the
     # /internal/advance-demo-day endpoint so it can't be hit by anyone else.

@@ -1,27 +1,29 @@
 name: Keep demo data live
 
-# Machine Monitoring answers "what is happening right now", and greys a machine
-# out once its newest time log is more than 20 minutes old. The Vercel cron in
-# vercel.json only tops the data up once a day, because daily is the only
-# schedule the Hobby plan allows - which leaves the live screens blank for all
-# but a few minutes of the day.
+# A coarse safety net, not a heartbeat.
 #
-# This closes that gap: it calls /internal/top-up-live often enough that the
-# newest time log is never far behind the clock. The endpoint is additive only
-# (it inserts new rows, never updates or deletes), so a duplicate or retried run
-# is harmless - it simply finds a smaller gap to fill.
+# This was originally written as a */5 schedule meant to keep Machine
+# Monitoring inside its 20-minute staleness window. That does not work:
+# GitHub's scheduler is best-effort, and on this repo a */5 cron was observed
+# actually firing roughly every 2.5 to 4.8 hours. No cron schedule available
+# here is frequent enough to keep a 20-minute window fresh.
 #
-# Every five minutes is deliberate headroom, not precision: GitHub's scheduler
-# is best-effort and routinely runs late under load, so aiming well inside the
-# 20-minute staleness window keeps the screens live even when a tick slips.
+# Keeping the live screens live is therefore the API's job now - it tops the
+# current shift up on read when the data has gone stale (see
+# services/dashboard/self_heal.py, enabled with DEMO_SELF_HEAL=true). This
+# workflow just nudges the dataset forward periodically so the deployment is
+# not entirely dependent on someone opening the page, and so a long quiet
+# stretch still leaves a sensible trail behind it.
+#
+# Half-hourly because GitHub honours coarse schedules far more reliably than
+# frequent ones, and because with self-healing reads in place the exact cadence
+# no longer matters.
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
-  # So it can be triggered by hand after a deploy or a reseed.
+    - cron: "*/30 * * * *"
   workflow_dispatch:
 
-# A late tick plus a manual run must not pile up on the same database.
 concurrency:
   group: keep-demo-live
   cancel-in-progress: false
@@ -36,28 +38,46 @@ jobs:
           BACKEND_URL: ${{ secrets.BACKEND_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          set -euo pipefail
+          # Deliberately no `set -e` around the request: an earlier version
+          # exited on curl's non-zero status before printing anything, so every
+          # failure looked identical in the log. Here the diagnostics always
+          # print and the step decides its own exit code at the end.
+          set -uo pipefail
 
-          if [ -z "${BACKEND_URL:-}" ] || [ -z "${CRON_SECRET:-}" ]; then
-            echo "::error::Set the BACKEND_URL and CRON_SECRET repository secrets."
-            exit 1
-          fi
+          fail() { echo "::error::$1"; exit 1; }
 
-          # --retry covers a cold serverless function or a sleeping Neon branch,
-          # either of which can make the first call of a quiet period time out.
+          # Length only, never the value - enough to spot "secret missing" or
+          # "pasted with a newline" without putting it in a public log.
+          echo "BACKEND_URL set: ${BACKEND_URL:+yes} (${#BACKEND_URL} chars)"
+          echo "CRON_SECRET set: ${CRON_SECRET:+yes} (${#CRON_SECRET} chars)"
+
+          [ -n "${BACKEND_URL:-}" ] || fail "BACKEND_URL repository secret is empty or unset."
+          [ -n "${CRON_SECRET:-}" ] || fail "CRON_SECRET repository secret is empty or unset."
+
+          url="${BACKEND_URL%/}/internal/top-up-live"
+          echo "GET ${url}"
+
           status=$(curl --silent --show-error --location \
             --retry 3 --retry-delay 5 --retry-connrefused \
             --max-time 60 \
             --header "Authorization: Bearer ${CRON_SECRET}" \
-            --output response.json \
+            --output response.txt \
             --write-out '%{http_code}' \
-            "${BACKEND_URL%/}/internal/top-up-live")
+            "${url}")
+          curl_exit=$?
 
-          echo "HTTP ${status}"
-          cat response.json || true
+          echo "curl exit: ${curl_exit}"
+          echo "HTTP status: ${status}"
+          echo "--- response ---"
+          head -c 2000 response.txt 2>/dev/null || echo "(no body)"
           echo
 
-          if [ "${status}" != "200" ]; then
-            echo "::error::top-up-live returned ${status}"
-            exit 1
-          fi
+          [ "${curl_exit}" -eq 0 ] || fail "curl failed with exit ${curl_exit} - the backend did not answer."
+
+          case "${status}" in
+            200) echo "Topped up." ;;
+            401) fail "401 Unauthorized - the CRON_SECRET secret here does not match CRON_SECRET in the Vercel project." ;;
+            404) fail "404 - /internal/top-up-live is not deployed. Push the backend and let Vercel redeploy." ;;
+            503) fail "503 - CRON_SECRET is not set on the Vercel project itself." ;;
+            *)   fail "Unexpected HTTP ${status}." ;;
+          esac

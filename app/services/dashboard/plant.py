@@ -58,6 +58,7 @@ def range_totals(
         db, plant_id, start, end, stage=corrugator, material_type=MaterialType.BOARD
     )
     dispatched = facts.dispatched_kg_by_day(db, plant_id, start, end)
+    bundling = facts.bundling_by_day(db, plant_id, start, end)
     power = facts.power_by_day(db, plant_id, start, end)
 
     running_minutes = sum(split.get("running", 0.0) for split in time_split.values())
@@ -69,6 +70,12 @@ def range_totals(
     paper_in = sum(inp for inp, _ in paper.values())
     board_out = sum(out for _, out in board.values())
     dispatched_kg = sum(dispatched.values())
+    # Bundling's own checkpoint - real, weighed output, not the same moment as
+    # dispatch (a bundle can sit staged before it ships). Sits between board
+    # and dispatched in the material-flow picture: the space it leaves out of
+    # board_output_kg is whatever printing lost or still has in progress, and
+    # the space between it and dispatched_kg is bundling's own WIP.
+    bundled_kg = sum(day["output_kg"] for day in bundling.values())
     grid_kwh = sum(day["grid_kwh"] for day in power.values())
     dg_kwh = sum(day["dg_kwh"] for day in power.values())
 
@@ -133,6 +140,7 @@ def range_totals(
         "plant_productivity_pct": productivity,
         "paper_consumed_kg": round(paper_in, 1),
         "board_output_kg": round(board_out, 1),
+        "bundled_output_kg": round(bundled_kg, 1),
         "dispatched_kg": round(dispatched_kg, 1),
         "overall_yield_pct": _ratio(dispatched_kg, paper_in),
         "waste_kg": round(waste_kg, 1),

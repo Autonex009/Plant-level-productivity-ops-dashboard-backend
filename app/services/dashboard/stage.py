@@ -719,6 +719,12 @@ def stage_view(db: Session, plant_id: int, stage: Stage, spec: RangeSpec, *, now
             "staged_orders_today": (
                 _staged_orders_count(db, plant_id, spec.end) if stage is Stage.BUNDLING else None
             ),
+            # The staged count on its own answers "how many" but not "out of
+            # how many" - this is that denominator, scoped to the same single
+            # day so the two numbers are directly comparable.
+            "orders_due_today": (
+                _orders_due_count(db, plant_id, spec.end) if stage is Stage.BUNDLING else None
+            ),
         },
         "kpis": kpis,
         "charts": charts,
@@ -737,6 +743,16 @@ def _staged_orders_count(db: Session, plant_id: int, day: date) -> int:
             Order.order_complete_staged_at.isnot(None),
             func.date(Order.order_complete_staged_at) == day,
         )
+        .scalar()
+    ) or 0
+
+
+def _orders_due_count(db: Session, plant_id: int, day: date) -> int:
+    from app.models import Order
+
+    return (
+        db.query(func.count(Order.id))
+        .filter(Order.plant_id == plant_id, Order.due_date == day)
         .scalar()
     ) or 0
 

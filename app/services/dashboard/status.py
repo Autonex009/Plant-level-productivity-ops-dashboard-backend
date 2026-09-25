@@ -239,6 +239,8 @@ def stage_status_line(db: Session, plant_id: int, *, now: datetime) -> list[dict
                     "live_value": None,
                     "live_unit": None,
                     "worst_machine": None,
+                    "rated_speed": None,
+                    "target": None,
                 }
             )
             continue
@@ -252,6 +254,11 @@ def stage_status_line(db: Session, plant_id: int, *, now: datetime) -> list[dict
             tile for tile in stage_tiles if tile["state"] == "running" and tile["rate"] is not None
         ]
         source = running[0] if running else None
+        # A dial needs a scale (the nameplate max, so the needle has somewhere
+        # to point) and, when there is one, a budget marker for the current
+        # order's standard - both already computed per machine, just not
+        # previously surfaced at stage level.
+        rated_speeds = [tile["rated_speed"] for tile in stage_tiles if tile["rated_speed"]]
 
         line.append(
             {
@@ -264,6 +271,8 @@ def stage_status_line(db: Session, plant_id: int, *, now: datetime) -> list[dict
                 "live_unit": (source or worst)["rate_unit"],
                 "minutes_in_state": worst["minutes_in_state"],
                 "worst_machine": worst["machine_code"],
+                "rated_speed": max(rated_speeds) if rated_speeds else None,
+                "target": (source or worst)["standard_rate"],
             }
         )
     return line

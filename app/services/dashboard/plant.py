@@ -9,9 +9,11 @@ no tables, no Paretos. All of that lives one level down.
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.models import Machine, MachineRun, Shift
 from app.models.enums import MaterialType, Stage
 from app.services.dashboard import facts
 from app.services.dashboard.bands import (
@@ -70,6 +72,23 @@ def range_totals(
     grid_kwh = sum(day["grid_kwh"] for day in power.values())
     dg_kwh = sum(day["dg_kwh"] for day in power.values())
 
+    # Linear metres run on the corrugator - the instrument-cluster odometer's
+    # other figure, alongside tonnes. Metres-run and board-output measure the
+    # same running time from two ends (encoder length vs weighed output), so
+    # this is its own query rather than derived from board_out.
+    lineal_metres = (
+        db.query(func.coalesce(func.sum(MachineRun.lineal_metres), 0.0))
+        .join(Machine, Machine.id == MachineRun.machine_id)
+        .join(Shift, Shift.id == MachineRun.shift_id)
+        .filter(
+            Shift.plant_id == plant_id,
+            Shift.shift_date >= start,
+            Shift.shift_date <= end,
+            Machine.stage == corrugator,
+        )
+        .scalar()
+    ) or 0.0
+
     minutes_by_category: dict[str, float] = defaultdict(float)
     for split in time_split.values():
         for category, minutes in split.items():
@@ -124,6 +143,7 @@ def range_totals(
         "dg_kwh": round(dg_kwh, 1),
         "total_kwh": round(total_kwh, 1),
         "tonnes_produced": round(tonnes, 3),
+        "lineal_metres_run": round(lineal_metres, 0),
         "power_per_tonne_kwh": _ratio(total_kwh, tonnes, scale=1.0),
         "dg_hours": round(dg_kwh / settings.dg_kw_rating, 1) if dg_kwh else 0.0,
         "grid_share_pct": _ratio(grid_kwh, total_kwh),
